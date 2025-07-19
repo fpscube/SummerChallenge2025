@@ -1,0 +1,6 @@
+- test de la simu avec le python en reference
+- simu sans minmax + eval
+- battre le python avec des heuristiques
+- push 
+- mise en place du min max
+- 
