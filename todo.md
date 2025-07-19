@@ -1,4 +1,5 @@
-- test de la simu avec le python en reference
+- mettre au niveau le jet de bomb
+- 
 - simu sans minmax + eval
 - battre le python avec des heuristiques
 - push 

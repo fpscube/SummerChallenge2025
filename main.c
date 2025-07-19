@@ -43,6 +43,10 @@ typedef struct {
 } SimulationResult;
 
 typedef struct {
+    // [agent_id][y][x] = distance depuis agent_id à (x, y)
+    int bfs_enemy_distances[MAX_AGENTS][MAX_HEIGHT][MAX_WIDTH];
+
+
     // Listes triées des meilleurs actions par agent
     AgentAction moves[MAX_AGENTS][MAX_MOVES_PER_AGENT];
     int move_counts[MAX_AGENTS];
@@ -106,9 +110,9 @@ typedef struct {
 } GameConstants;
 
 typedef struct {
-    int agent_count;
     AgentState agents[MAX_AGENTS];
-    int my_agent_count;
+    int agent_count_do_not_use; // use alive instead
+    int my_agent_count_do_not_use; // use alive instead
 } GameState;
 
 typedef struct {
@@ -183,9 +187,9 @@ void read_game_inputs_cycle() {
     for (int i = 0; i < MAX_AGENTS; i++) {
         game.state.agents[i].alive = 0;
     }
-    scanf("%d", &game.state.agent_count);
+    scanf("%d", &game.state.agent_count_do_not_use);
     int agent_id,agent_x,agent_y,agent_cooldown,agent_splash_bombs,agent_wetness;
-    for (int i = 0; i < game.state.agent_count; i++) {
+    for (int i = 0; i < game.state.agent_count_do_not_use; i++) {
         scanf("%d%d%d%d%d%d",
               &agent_id,
               &agent_x,
@@ -197,12 +201,64 @@ void read_game_inputs_cycle() {
         agent_id = agent_id -1;
         game.state.agents[agent_id] = (AgentState){agent_id,agent_x,agent_y,agent_cooldown,agent_splash_bombs,agent_wetness,1};
     }
-
-    scanf("%d", &game.state.my_agent_count);
+    
+    scanf("%d", &game.state.my_agent_count_do_not_use);
     CPU_RESET;
 }
 
-void compute_best_agents_moves() {
+void precompute_bfs_distances() {
+    static const int dirs[4][2] = {{0,1},{1,0},{0,-1},{-1,0}};
+
+    for (int k = 0; k < MAX_AGENTS; k++) {
+        AgentState* enemy = &game.state.agents[k];
+        if (!enemy->alive) continue;
+
+        int eid = enemy->id;
+        int visited[MAX_HEIGHT][MAX_WIDTH] = {0};
+        int dist[MAX_HEIGHT][MAX_WIDTH] = {0};
+
+        int queue_x[MAX_WIDTH * MAX_HEIGHT];
+        int queue_y[MAX_WIDTH * MAX_HEIGHT];
+        int front = 0, back = 0;
+
+        visited[enemy->y][enemy->x] = 1;
+        dist[enemy->y][enemy->x] = 0;
+        queue_x[back] = enemy->x;
+        queue_y[back++] = enemy->y;
+
+        while (front < back) {
+            int x = queue_x[front];
+            int y = queue_y[front++];
+            for (int d = 0; d < 4; d++) {
+                int nx = x + dirs[d][0];
+                int ny = y + dirs[d][1];
+                if (nx < 0 || nx >= game.consts.map.width || ny < 0 || ny >= game.consts.map.height)
+                    continue;
+                if (game.consts.map.map[ny][nx].type > 0) continue; // obstacle
+                if (visited[ny][nx]) continue;
+
+                visited[ny][nx] = 1;
+                dist[ny][nx] = dist[y][x] + 1;
+
+                queue_x[back] = nx;
+                queue_y[back++] = ny;
+            }
+        }
+
+        // Stocker dans la sortie
+        for (int y = 0; y < game.consts.map.height; y++) {
+            for (int x = 0; x < game.consts.map.width; x++) {
+                if (!visited[y][x])
+                    game.output.bfs_enemy_distances[eid][y][x] = 9999;
+                else
+                    game.output.bfs_enemy_distances[eid][y][x] = dist[y][x];
+            }
+        }
+    }
+}
+
+
+void compute_best_agents_moves(int agent_id) {
     static const int dirs[5][2] = {
         {0, 0},   // stay in place
         {-1, 0},  // left
@@ -211,219 +267,207 @@ void compute_best_agents_moves() {
         {0, 1}    // down
     };
 
-    for (int i = 0; i < game.state.agent_count; i++) {
-        AgentState* agent_state = &game.state.agents[i];
-        AgentInfo* agent_info   = &game.consts.agent_info[i];
+    AgentState* agent_state = &game.state.agents[agent_id];
+    AgentInfo* agent_info   = &game.consts.agent_info[agent_id];
 
-        game.output.move_counts[i] = 0;
-        if (!agent_state->alive) continue;
+    game.output.move_counts[agent_id] = 0;
 
-        int my_player_id = agent_info->player_id;
-        int enemy_player_id = !my_player_id;
-        int enemy_start = game.consts.player_info[enemy_player_id].agent_start_index;
-        int enemy_stop  = game.consts.player_info[enemy_player_id].agent_stop_index;
+    int my_player_id = agent_info->player_id;
+    int enemy_player_id = !my_player_id;
 
-        for (int d = 0; d < 5; d++) {
-            int nx = agent_state->x + dirs[d][0];
-            int ny = agent_state->y + dirs[d][1];
+    int enemy_start = game.consts.player_info[enemy_player_id].agent_start_index;
+    int enemy_stop  = game.consts.player_info[enemy_player_id].agent_stop_index;
 
-            if (nx < 0 || nx >= game.consts.map.width || ny < 0 || ny >= game.consts.map.height) continue;
-            if (game.consts.map.map[ny][nx].type > 0) continue;
+    int ally_start = game.consts.player_info[my_player_id].agent_start_index;
+    int ally_stop  = game.consts.player_info[my_player_id].agent_stop_index;
 
-            int min_dist = 9999;
+    // Étape 1 : Y a-t-il un ennemi dangereux proche ?
+    bool danger = false;
+    for (int k = enemy_start; k <= enemy_stop; k++) {
+        AgentState* enemy = &game.state.agents[k];
+        if (!enemy->alive) continue;
+        if (enemy->splash_bombs <= 0) continue;
 
-            for (int k = enemy_start; k <= enemy_stop; k++) {
-                AgentState* op_state = &game.state.agents[k];
-                if (!op_state->alive) continue;
-
-                int dist = abs(op_state->x - nx) + abs(op_state->y - ny);
-                if (dist < min_dist) min_dist = dist;
-            }
-
-            AgentAction action = {
-                .target_x_or_id = nx,
-                .target_y = ny,
-                .score = -min_dist
-            };
-
-            if (game.output.move_counts[i] < MAX_MOVES_PER_AGENT) {
-                game.output.moves[i][game.output.move_counts[i]++] = action;
-            }
-        }
-
-        // Tri décroissant du score (meilleure proximité d'abord)
-        for (int m = 0; m < game.output.move_counts[i] - 1; m++) {
-            for (int n = m + 1; n < game.output.move_counts[i]; n++) {
-                if (game.output.moves[i][n].score > game.output.moves[i][m].score) {
-                    AgentAction tmp = game.output.moves[i][m];
-                    game.output.moves[i][m] = game.output.moves[i][n];
-                    game.output.moves[i][n] = tmp;
-                }
-            }
+        int dist = abs(enemy->x - agent_state->x) + abs(enemy->y - agent_state->y);
+        if (dist <= 7) {
+            danger = true;
+            break;
         }
     }
-}
 
+    // Étape 2 : Générer les mouvements possibles
+    for (int d = 0; d < 5; d++) {
+        int nx = agent_state->x + dirs[d][0];
+        int ny = agent_state->y + dirs[d][1];
 
-void compute_best_agents_shoot() {
-    for (int i = 0; i < game.state.agent_count; i++) {
-        AgentState* shooter_state = &game.state.agents[i];
-        AgentInfo* shooter_info   = &game.consts.agent_info[i];
-        AgentAction * output_list = &game.output.shoots[i][0];
+        if (nx < 0 || nx >= game.consts.map.width || ny < 0 || ny >= game.consts.map.height) continue;
+        if (game.consts.map.map[ny][nx].type > 0) continue;
 
-        game.output.shoot_counts[i] = 0;
-        if (!shooter_state->alive || shooter_state->cooldown > 0) continue;
-
-        int my_player_id = shooter_info->player_id;
-        int enemy_player_id = !my_player_id;
-        int enemy_start = game.consts.player_info[enemy_player_id].agent_start_index;
-        int enemy_stop  = game.consts.player_info[enemy_player_id].agent_stop_index;
-
-        int shoots_count = 0;
-
+        int min_dist_to_enemy = 9999;
         for (int k = enemy_start; k <= enemy_stop; k++) {
-            AgentState* enemy = &game.state.agents[k];
-            if (!enemy->alive) continue;
+            AgentState* op_state = &game.state.agents[k];
+            if (!op_state->alive) continue;
 
-            int dx = abs(enemy->x - shooter_state->x);
-            int dy = abs(enemy->y - shooter_state->y);
-            int dist = dx + dy;
-
-            int max_range = 2 * shooter_info->optimal_range;
-
-            if (dist > max_range) continue; // tir impossible
-
-            // Bonus si proche de la portée optimale
-            float optimal_bonus = (dist <= shooter_info->optimal_range)
-                ? 1.5f
-                : 1.0f;
-
-            // Score = wetness priorité + proximité portée
-            float score = enemy->wetness * optimal_bonus - dist * 2;
-
-            AgentAction shoot = {
-                .target_x_or_id = k, // ID de l’ennemi
-                .target_y = 0, // unused
-                .score = score
-            };
-            output_list[shoots_count++] = shoot;
+            int dist = game.output.bfs_enemy_distances[op_state->id][ny][nx];
+            if (dist < min_dist_to_enemy) min_dist_to_enemy = dist;
         }
 
-        // Tri des tirs par score décroissant
-        for (int m = 0; m < shoots_count - 1; m++) {
-            for (int n = m + 1; n < shoots_count; n++) {
-                if (output_list[n].score > output_list[m].score) {
-                    AgentAction tmp = output_list[m];
-                    output_list[m] = output_list[n];
-                    output_list[n] = tmp;
+        float penalty = 0.0f;
+
+        // Si danger = vrai, on pénalise les positions trop proches d’un allié (< 2 cases)
+        if (danger) {
+            for (int a = ally_start; a <= ally_stop; a++) {
+                if (a == agent_id) continue; // ne pas se comparer à soi-même
+                AgentState* ally = &game.state.agents[a];
+                if (!ally->alive) continue;
+
+                int dist_ally = abs(ally->x - nx) + abs(ally->y - ny);
+                if (dist_ally < 2) {
+                    penalty += 20.0f; // grosse pénalité
                 }
             }
         }
-        game.output.shoot_counts[i] = shoots_count;
+
+        AgentAction action = {
+            .target_x_or_id = nx,
+            .target_y = ny,
+            .score = -min_dist_to_enemy - penalty
+        };
+
+        if (game.output.move_counts[agent_id] < MAX_MOVES_PER_AGENT) {
+            game.output.moves[agent_id][game.output.move_counts[agent_id]++] = action;
+        }
+    }
+
+    // Tri décroissant du score
+    for (int m = 0; m < game.output.move_counts[agent_id] - 1; m++) {
+        for (int n = m + 1; n < game.output.move_counts[agent_id]; n++) {
+            if (game.output.moves[agent_id][n].score > game.output.moves[agent_id][m].score) {
+                AgentAction tmp = game.output.moves[agent_id][m];
+                game.output.moves[agent_id][m] = game.output.moves[agent_id][n];
+                game.output.moves[agent_id][n] = tmp;
+            }
+        }
     }
 }
 
-void compute_best_agents_bomb() {
-    for (int i = 0; i < game.state.agent_count; i++) {
-        game.output.bomb_counts[i] = 0;
 
-        AgentState* thrower_state = &game.state.agents[i];
-        AgentInfo* thrower_info   = &game.consts.agent_info[i];
-        if (!thrower_state->alive || thrower_state->splash_bombs <= 0) continue;
+void compute_best_agents_shoot(int agent_id,int new_shooter_x,int new_shooter_y) {
 
-        int my_player_id = thrower_info->player_id;
-        int enemy_player_id = !my_player_id;
+    AgentState* shooter_state = &game.state.agents[agent_id];
+    AgentInfo* shooter_info   = &game.consts.agent_info[agent_id];
+    AgentAction * output_list = &game.output.shoots[agent_id][0];
 
-        // Parcours des ennemis vivants
-        for (int k = game.consts.player_info[enemy_player_id].agent_start_index;
-                 k <= game.consts.player_info[enemy_player_id].agent_stop_index; ++k) {
+    game.output.shoot_counts[agent_id] = 0;
+    if (shooter_state->cooldown > 0) return;
 
-            AgentState* enemy = &game.state.agents[k];
-            if (!enemy->alive) continue;
+    int my_player_id = shooter_info->player_id;
+    int enemy_player_id = !my_player_id;
+    int enemy_start = game.consts.player_info[enemy_player_id].agent_start_index;
+    int enemy_stop  = game.consts.player_info[enemy_player_id].agent_stop_index;
 
-            int tx = enemy->x;
-            int ty = enemy->y;
+    int shoots_count = 0;
 
-            // Vérifier portée
-            int dist = abs(tx - thrower_state->x) + abs(ty - thrower_state->y);
-            if (dist > 4) continue;
+    for (int k = enemy_start; k <= enemy_stop; k++) {
+        AgentState* enemy = &game.state.agents[k];
+        if (!enemy->alive) continue;
+        
 
-            bool has_ally = false;
-            // Vérifie si un allié est présent dans la zone 3x3 centrée sur (tx, ty)
-            for (int ox = -1; ox <= 1 && !has_ally; ox++) {
-                for (int oy = -1; oy <= 1; oy++) {
-                    int ax = tx + ox;
-                    int ay = ty + oy;
-                    if (ax < 0 || ax >= game.consts.map.width || ay < 0 || ay >= game.consts.map.height)
-                        continue;
+        int dx = abs(enemy->x - new_shooter_x);
+        int dy = abs(enemy->y - new_shooter_y);
+        int dist = dx + dy;
 
-                    for (int j = game.consts.player_info[my_player_id].agent_start_index;
-                             j <= game.consts.player_info[my_player_id].agent_stop_index; j++) {
-                        if (!game.state.agents[j].alive) continue;
-                        AgentState* ally = &game.state.agents[j];
+        int max_range = 2 * shooter_info->optimal_range;
 
-                        // ⚠️ Ne pas bombarder un allié
-                        if (ally->x == ax && ally->y == ay) {
-                            has_ally = true;
-                            break;
-                        }
-                    }
+        if (dist > max_range) continue; // tir impossible
 
-                    // ⚠️ Ne pas bombarder la position future du tireur
-                    for (int m = 0; m < game.output.move_counts[i]; m++) {
-                        AgentAction* mv = &game.output.moves[i][m];
-                        if (mv->target_x_or_id == ax && mv->target_y == ay) {
-                            has_ally = true;
-                            break;
-                        }
-                    }
-                }
+        // Bonus si proche de la portée optimale
+        float optimal_bonus = (dist <= shooter_info->optimal_range)
+            ? 1.5f
+            : 1.0f;
+
+        // Score = wetness priorité + proximité portée
+        float score = enemy->wetness * optimal_bonus - dist * 2;
+
+        AgentAction shoot = {
+            .target_x_or_id = k, // ID de l’ennemi
+            .target_y = 0, // unused
+            .score = score
+        };
+        output_list[shoots_count++] = shoot;
+    }
+
+    // Tri des tirs par score décroissant
+    for (int m = 0; m < shoots_count - 1; m++) {
+        for (int n = m + 1; n < shoots_count; n++) {
+            if (output_list[n].score > output_list[m].score) {
+                AgentAction tmp = output_list[m];
+                output_list[m] = output_list[n];
+                output_list[n] = tmp;
             }
+        }
+    }
+    game.output.shoot_counts[agent_id] = shoots_count;
+    
+}
+void compute_best_agents_bomb(int agent_id,int new_thrower_x,int new_thrower_y) {
+    game.output.bomb_counts[agent_id] = 0;
 
-            if (has_ally) continue;
+    AgentState* thrower_state = &game.state.agents[agent_id];
+    AgentInfo* thrower_info   = &game.consts.agent_info[agent_id];
+    if (!thrower_state->alive || thrower_state->splash_bombs <= 0) return;
 
-            // Score simple : 1 point par ennemi touché dans la zone
-            int hits = 0;
-            for (int ox = -1; ox <= 1; ox++) {
-                for (int oy = -1; oy <= 1; oy++) {
-                    int ax = tx + ox;
-                    int ay = ty + oy;
-                    if (ax < 0 || ax >= game.consts.map.width || ay < 0 || ay >= game.consts.map.height)
-                        continue;
+    int my_player_id = thrower_info->player_id;
+    int enemy_player_id = !my_player_id;
 
-                    for (int e = game.consts.player_info[enemy_player_id].agent_start_index;
-                             e <= game.consts.player_info[enemy_player_id].agent_stop_index; e++) {
-                        if (!game.state.agents[e].alive) continue;
-                        AgentState* target = &game.state.agents[e];
-                        if (target->x == ax && target->y == ay) {
-                            hits++;
-                        }
-                    }
-                }
-            }
+    // Parcours des ennemis vivants
+    for (int k = game.consts.player_info[enemy_player_id].agent_start_index;
+            k <= game.consts.player_info[enemy_player_id].agent_stop_index; ++k) {
 
-            if (hits == 0) continue;
+        AgentState* enemy = &game.state.agents[k];
+        if (!enemy->alive) continue;
 
-            float score = hits * 10.0f;
+        int tx = enemy->x;
+        int ty = enemy->y;
 
-            if (game.output.bomb_counts[i] < MAX_BOMB_PER_AGENT) {
-                game.output.bombs[i][game.output.bomb_counts[i]++] = (AgentAction){
-                    .target_x_or_id = tx,
-                    .target_y = ty,
-                    .score = score
-                };
+        // Vérifier portée
+        int dist = abs(tx - new_thrower_x) + abs(ty - new_thrower_y);
+        if (dist > 4) continue;
+
+        // Vérifier que la bombe ne touche pas un allié ni le lanceur
+        bool hits_ally_or_self = false;
+        for (int a = game.consts.player_info[my_player_id].agent_start_index;
+                a <= game.consts.player_info[my_player_id].agent_stop_index; ++a) {
+            AgentState* ally = &game.state.agents[a];
+            if (!ally->alive) continue;
+
+            int dxa = abs(ally->x - tx);
+            int dya = abs(ally->y - ty);
+            if (dxa <= 1 && dya <= 1) {
+                hits_ally_or_self = true;
+                break;
             }
         }
 
-        // Tri décroissant par score
-        int count = game.output.bomb_counts[i];
-        for (int m = 0; m < count - 1; m++) {
-            for (int n = m + 1; n < count; n++) {
-                if (game.output.bombs[i][n].score > game.output.bombs[i][m].score) {
-                    AgentAction tmp = game.output.bombs[i][m];
-                    game.output.bombs[i][m] = game.output.bombs[i][n];
-                    game.output.bombs[i][n] = tmp;
-                }
+        if (hits_ally_or_self) continue;
+
+        if (game.output.bomb_counts[agent_id] < MAX_BOMB_PER_AGENT) {
+            game.output.bombs[agent_id][game.output.bomb_counts[agent_id]++] = (AgentAction){
+                .target_x_or_id = tx,
+                .target_y = ty,
+                .score = 100 - enemy->wetness
+            };
+        }
+    }
+
+    // Tri décroissant par score
+    int count = game.output.bomb_counts[agent_id];
+    for (int m = 0; m < count - 1; m++) {
+        for (int n = m + 1; n < count; n++) {
+            if (game.output.bombs[agent_id][n].score > game.output.bombs[agent_id][m].score) {
+                AgentAction tmp = game.output.bombs[agent_id][m];
+                game.output.bombs[agent_id][m] = game.output.bombs[agent_id][n];
+                game.output.bombs[agent_id][n] = tmp;
             }
         }
     }
@@ -432,20 +476,26 @@ void compute_best_agents_bomb() {
 
 
 void compute_best_agents_commands() {
-    for (int i = 0; i < game.state.agent_count; i++) {
 
-        game.output.agent_command_counts[i]=0;
-        
+    
+
+    for (int i = 0; i < MAX_AGENTS; i++) {
+
+        game.output.agent_command_counts[i]=0;        
         if(!game.state.agents[i].alive) continue;
-        
         int cmd_index = 0;
+        
+        compute_best_agents_moves(i);     
+
         int move_count= game.output.move_counts[i];
+        
 
         for (int m = 0; m < move_count && cmd_index < MAX_COMMANDS_PER_AGENT; m++) {
             AgentAction* mv = &game.output.moves[i][m];
             int mv_x = mv->target_x_or_id;
             int mv_y = mv->target_y;
 
+            compute_best_agents_bomb(i,mv_x,mv_y);
             // 1. Bombe (max 1)
             if (game.output.bomb_counts[i] > 0 && cmd_index < MAX_COMMANDS_PER_AGENT) {
                 AgentAction* bomb = &game.output.bombs[i][0]; // meilleure bombe
@@ -459,6 +509,7 @@ void compute_best_agents_commands() {
                 };
             }
 
+            compute_best_agents_shoot(i,mv_x,mv_y);
             // 2. Shoots (jusqu’à 5)
             int shoot_limit = game.output.shoot_counts[i];
             if (shoot_limit > MAX_SHOOTS_PER_AGENT) shoot_limit = MAX_SHOOTS_PER_AGENT;
@@ -518,7 +569,6 @@ void compute_best_player_commands() {
             int carry = 1;
             for (int agent_id = agent_start_id; agent_id <= agent_stop_id && carry; agent_id++) {
                 if(!game.state.agents[agent_id].alive) continue;
-                int cmd_id = indices[agent_id];
                 indices[agent_id]++;
                 int cur_index = indices[agent_id];
                 if (cur_index >= MAX_BEST_CMD_PER_AGENTS ||  cur_index >= game.output.agent_command_counts[agent_id]) {
@@ -611,12 +661,7 @@ void apply_output() {
     int agent_stop_id = game.consts.player_info[my_player_id].agent_stop_index;
 
     if (game.output.simulation_count == 0) {
-        // Pas de simulation, on ordonne juste HUNKER_DOWN sans déplacement pour tous les agents
-        for (int i = 0; i < game.state.my_agent_count; i++) {
-            printf("%d;HUNKER_DOWN", game.state.agents[i].id);
-            printf(";MESSAGE %.2fms\n",cpu);
-        }
-        return;
+       ERROR("no simu result");
     }
 
     int best_index = game.output.simulation_results[0].my_cmds_index;
@@ -663,15 +708,11 @@ int main() {
     read_game_inputs_init();
 
     while (1) {
-        // ========== Step 0: Lecture des entrées
+        // ========== Step 1: Lecture des entrées
         read_game_inputs_cycle();
 
-        // ========== Step 1: Actions élémentaires pour chaque agent ==========
-        compute_best_agents_moves();
-        compute_best_agents_shoot();
-        compute_best_agents_bomb();
-
         // ========== Step 2: Liste des meilleures commandes par agent ==========
+        precompute_bfs_distances();
         compute_best_agents_commands();
 
         // ========== Step 3: Combinaisons possibles entre agents ==========
