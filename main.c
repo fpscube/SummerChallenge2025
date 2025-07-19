@@ -648,6 +648,7 @@ void apply_output() {
         printf(";MESSAGE %.2fms",cpu);
 
         printf("\n");
+        fflush(stdout);
     }
 }
 

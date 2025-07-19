@@ -1,0 +1,1 @@
+python3 /home/stephane/git/codingG/SummerChallenge2025/bot0.py
