@@ -1,2 +1,4 @@
-Agent 1 Win Percentage: 38,25%
-Agent 2 Win Percentage: 61,75%
+Final Statistics:
+Agent 1 Win Percentage: 32,00%
+Agent 2 Win Percentage: 68,00%
+Tie Percentage: 0,00%

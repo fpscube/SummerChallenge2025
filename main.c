@@ -676,12 +676,46 @@ void compute_evaluation() {
                     if (dx <= 1 && dy <= 1)  sim_agents[t].wetness += 30;
                 }
             }       
-            if (cmd->action_type == CMD_SHOOT)
+            else if (cmd->action_type == CMD_SHOOT)
             {
                 int target_id = cmd->target_x_or_id;
-                sim_agents[target_id].wetness += game.consts.agent_info[aid].soaking_power/2.0;
-                // simulate properly shoot
+                if (!sim_agents[target_id].alive) continue;
+
+                AgentState* shooter = &sim_agents[aid];
+                AgentState* target = &sim_agents[target_id];
+                AgentInfo* shooter_info = &game.consts.agent_info[aid];
+                // AgentInfo* target_info = &game.consts.agent_info[target_id];
+
+                // === Distance Manhattan ===
+                int dx = abs(shooter->x - target->x);
+                int dy = abs(shooter->y - target->y);
+                int dist = dx + dy;
+
+                // === Range modifier ===
+                float range_modifier = 0.0f;
+                if (dist <= shooter_info->optimal_range)
+                    range_modifier = 1.0f;
+                else if (dist <= 2 * shooter_info->optimal_range)
+                    range_modifier = 0.5f;
+                else
+                    range_modifier = 0.0f;
+
+                if (range_modifier == 0.0f) continue; // cible trop loin
+
+                // === Cover modifier (à 1.0 par défaut) ===
+                float cover_modifier = 1.0f; // TODO: check map obstacles later
+
+                // === Hunker modifier (0.25 si accroupi, ici on ne gère pas encore le hunker)
+                float hunker_bonus = 0.0f; // TODO: ajouter gestion si hunkered plus tard
+
+                // === Damage calc ===
+                float base_damage = shooter_info->soaking_power;
+                int damage = (int)(base_damage * range_modifier * (cover_modifier - hunker_bonus));
+
+                if (damage > 0)
+                    target->wetness += damage;
             }
+
         }
    
 
