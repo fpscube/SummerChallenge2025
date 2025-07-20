@@ -1,3 +1,10 @@
+#undef _GLIBCXX_DEBUG                // disable run-time bound checking, etc
+#pragma GCC optimize("Ofast,inline") // Ofast = O3,fast-math,allow-store-data-races,no-protect-parens
+
+#pragma GCC target("bmi,bmi2,lzcnt,popcnt")                      // bit manipulation
+#pragma GCC target("movbe")                                      // byte swap
+#pragma GCC target("aes,pclmul,rdrnd")                           // encryption
+#pragma GCC target("avx,avx2,f16c,fma,sse2,sse3,ssse3,sse4.1,sse4.2") // SIMD
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -8,7 +15,7 @@
 #define MAX_WIDTH  20
 #define MAX_HEIGHT 20
 #define MAX_AGENTS 10
-#define MAX_BEST_CMD_PER_AGENTS 2
+#define MAX_BEST_CMD_PER_AGENTS 3
 #define MAX_PLAYERS 2
 #define MAX_MOVES_PER_AGENT 5
 #define MAX_SHOOTS_PER_AGENT 5
@@ -630,74 +637,107 @@ void compute_best_player_commands() {
 }
 
 
-void compute_minimax_evaluation() {
-    // utilisation d'une liste dans le datamodel pour stocker les resultat de la simulation et les score
-    // Minimax / early-prune / memoisation/eval
-    // dans un premier temps 
-    fprintf(stderr, "\n=== DEBUG: Minimax - Aperçu des premières commandes par joueur ===\n");
-    int my_player_id = game.consts.my_player_id;
-    for (int p = 0; p < MAX_PLAYERS; p++) {
-        if(p==my_player_id)
-            fprintf(stderr, "--- PLAYER ME ----\n");
-        else
-            fprintf(stderr, "--- PLAYER OP ----\n");
+void compute_evaluation() {
+    int my_id = game.consts.my_player_id;
+    int my_start = game.consts.player_info[my_id].agent_start_index;
+    int my_stop  = game.consts.player_info[my_id].agent_stop_index;
 
-        int count = game.output.player_command_count[p];
-        int to_show = (count < 2) ? count : 2;
+    game.output.simulation_count = 0;
 
+    // For all my cmd to test // todo min max enemie
+    int count = game.output.player_command_count[my_id];
+    for (int i = 0; i < count; i++) {
+        // État simulé des agents
+        AgentState sim_agents[MAX_AGENTS];
+        memcpy(sim_agents, game.state.agents, sizeof(sim_agents));
 
-        int agent_start_id = game.consts.player_info[p].agent_start_index;
-        int agent_stop_id = game.consts.player_info[p].agent_stop_index;
+        int wetness_gain = 0;
+        int nb_50_wet_gain = 0;
+        int nb_100_wet_gain = 0;
 
-        for (int i = 0; i < to_show; i++) {
-            fprintf(stderr, "  Command set #%d:\n", i);
-            for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
-                if(!game.state.agents[agent_id].alive) continue;
+        // === Étape 1: appliquer les mouvements ===
+        for (int aid = my_start; aid <= my_stop; aid++) {
+            if (!sim_agents[aid].alive) continue;
+            AgentCommand* cmd = &game.output.player_commands[my_id][i][aid];
+            sim_agents[aid].x = cmd->mv_x;
+            sim_agents[aid].y = cmd->mv_y;
+        }
 
-                AgentCommand* cmd = &game.output.player_commands[p][i][agent_id];
-                
-                // Skip empty entries (agents non utilisés dans cette team)
-                if (cmd->mv_x == 0 && cmd->mv_y == 0 && cmd->action_type == CMD_HUNKER && cmd->target_x_or_id == -1)
-                    continue;
-
-                const char* action_name = (cmd->action_type == CMD_HUNKER) ? "HUNKER" :
-                                          (cmd->action_type == CMD_SHOOT)  ? "SHOOT" :
-                                          (cmd->action_type == CMD_THROW)  ? "THROW" : "?";
-
-                fprintf(stderr, "    [%d] %s  MV=(%d,%d)  ", agent_id, action_name, cmd->mv_x, cmd->mv_y);
-                if (cmd->action_type == CMD_HUNKER) {
-                    fprintf(stderr, "TARGET=(-,-)\n");
-                } else {
-                    fprintf(stderr, "TARGET=(%d,%d)\n", cmd->target_x_or_id, cmd->target_y);
+        // === Étape 2: bombes/shoot===
+        for (int aid = my_start; aid <= my_stop; aid++) {
+            if (!sim_agents[aid].alive) continue;
+            AgentCommand* cmd = &game.output.player_commands[my_id][i][aid];
+            if (cmd->action_type == CMD_THROW)
+            {
+                for (int t = 0; t < MAX_AGENTS; t++) {
+                    if (!sim_agents[t].alive) continue;
+                    int dx = abs(sim_agents[t].x - cmd->target_x_or_id);
+                    int dy = abs(sim_agents[t].y - cmd->target_y);
+                    if (dx <= 1 && dy <= 1)  sim_agents[t].wetness += 30;
                 }
+            }       
+            if (cmd->action_type == CMD_SHOOT)
+            {
+                int target_id = cmd->target_x_or_id;
+                sim_agents[target_id].wetness += game.consts.agent_info[aid].soaking_power/2.0;
+                // simulate properly shoot
+            }
+        }
+   
+
+        // === Étape 3: kpi dead ===
+        for (int aid = 0; aid < MAX_AGENTS; aid++) {
+            int curr_wet = game.state.agents[aid].wetness;
+            int new_wet = sim_agents[aid].wetness;
+            if(new_wet>=100)
+            {
+                new_wet=100;
+                sim_agents[aid].alive=0;
+            }
+            int pId = game.consts.agent_info[aid].player_id;
+            int delta_wet = new_wet-curr_wet;
+            if(delta_wet==0) continue;
+            if(new_wet>=100) {nb_100_wet_gain=(my_id==pId)?(nb_100_wet_gain-1):(nb_100_wet_gain+1);}
+            if(new_wet>=50) {nb_50_wet_gain=(my_id==pId)?(nb_50_wet_gain-1):(nb_50_wet_gain+1);}
+            wetness_gain = (my_id==pId)?(wetness_gain-delta_wet):(wetness_gain+delta_wet);
+        }
+
+        // === Étape 5: score de contrôle de zone ===
+        int control_score = 0;
+        for (int aid = my_start; aid <= my_stop; aid++) {
+            if (!sim_agents[aid].alive) continue;
+            control_score += controlled_score_gain_if_agent_moves_to(aid, sim_agents[aid].x, sim_agents[aid].y);
+        }
+
+        // === Étape 6: évaluation finale ===
+        float score =
+            control_score * 10.0f +
+            wetness_gain * 1.5f +
+            nb_50_wet_gain * 20.0f +
+            nb_100_wet_gain * 30.0f ;
+
+        game.output.simulation_results[game.output.simulation_count++] = (SimulationResult){
+            .score = score,
+            .my_cmds_index = i,
+            .op_cmds_index = -1 // ignoré pour l’instant
+        };
+    }
+
+    // Tri décroissant des résultats
+    for (int a = 0; a < game.output.simulation_count - 1; a++) {
+        for (int b = a + 1; b < game.output.simulation_count; b++) {
+            if (game.output.simulation_results[b].score > game.output.simulation_results[a].score) {
+                SimulationResult tmp = game.output.simulation_results[a];
+                game.output.simulation_results[a] = game.output.simulation_results[b];
+                game.output.simulation_results[b] = tmp;
             }
         }
     }
-    // === Stocker la première combinaison par défaut ===
-    if (game.output.player_command_count[my_player_id] > 0 &&
-        game.output.player_command_count[!my_player_id] > 0 &&
-        game.output.simulation_count < MAX_SIMULATIONS) {
-
-        game.output.simulation_results[0] = (SimulationResult){
-            .score = 0.0f, // tu peux ajuster ici selon ton modèle plus tard
-            .my_cmds_index = 0,
-            .op_cmds_index = 0
-        };
-
-        game.output.simulation_count = 1;
-
-        fprintf(stderr, "\n✔️  SimulationResult[0] initialisé avec le premier set de commandes.\n");
-    } else {
-        fprintf(stderr, "⚠️  Impossible d'initialiser SimulationResult[0] (listes vides).\n");
-    }
-
-    fprintf(stderr, "=========================================================\n");
 }
 
 
-void compute_beam_search_evaluation() {
-    // Beam search profondeur N
-}
+
+
 
 void apply_output() {
     float cpu=CPU_MS_USED;
@@ -754,23 +794,21 @@ int main() {
     read_game_inputs_init();
 
     while (1) {
-        // ========== Step 1: Lecture des entrées
+        fprintf(stderr,"current\n");
+        // ========== Lecture des entrées
         read_game_inputs_cycle();
 
-        // ========== Step 2: Liste des meilleures commandes par agent ==========
+        // ========== Liste des meilleures commandes par agent ==========
         precompute_bfs_distances();
         compute_best_agents_commands();
 
-        // ========== Step 3: Combinaisons possibles entre agents ==========
+        // ========== Combinaisons possibles entre agents ==========
         compute_best_player_commands();
 
-        // ========== Step 4: Évaluation stratégique ==========
-        compute_minimax_evaluation();
+        // ========== Évaluation stratégique ==========
+        compute_evaluation();
 
-        // ========== Step 5: Recherche anticipée ==========
-        compute_beam_search_evaluation();
-
-        // ========== Step 6: Application ==========
+        // ========== Application ==========
         apply_output();
     }
 
