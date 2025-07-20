@@ -641,6 +641,8 @@ void compute_evaluation() {
     int my_id = game.consts.my_player_id;
     int my_start = game.consts.player_info[my_id].agent_start_index;
     int my_stop  = game.consts.player_info[my_id].agent_stop_index;
+    // int op_start = game.consts.player_info[!my_id].agent_start_index;
+    // int op_stop  = game.consts.player_info[!my_id].agent_stop_index;
 
     game.output.simulation_count = 0;
 
@@ -662,8 +664,9 @@ void compute_evaluation() {
             sim_agents[aid].x = cmd->mv_x;
             sim_agents[aid].y = cmd->mv_y;
         }
+ 
 
-        // === Étape 2: bombes/shoot===
+        // === Étape 2.1: bombes/shoot===
         for (int aid = my_start; aid <= my_stop; aid++) {
             if (!sim_agents[aid].alive) continue;
             AgentCommand* cmd = &game.output.player_commands[my_id][i][aid];
@@ -745,10 +748,10 @@ void compute_evaluation() {
 
         // === Étape 6: évaluation finale ===
         float score =
-            control_score * 10.0f +
-            wetness_gain * 1.5f +
-            nb_50_wet_gain * 20.0f +
-            nb_100_wet_gain * 30.0f ;
+            wetness_gain/100.0f   * 10.0f +
+            control_score/100.0f  * 100.0f +
+            nb_50_wet_gain/10.0f  * 1000.0f +
+            nb_100_wet_gain/10.0f * 10000.0f ;
 
         game.output.simulation_results[game.output.simulation_count++] = (SimulationResult){
             .score = score,
