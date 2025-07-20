@@ -1,2 +1,2 @@
-Agent 1 Win Percentage: 59,00%
-Agent 2 Win Percentage: 41,00%
+Agent 1 Win Percentage: 38,25%
+Agent 2 Win Percentage: 61,75%

@@ -697,8 +697,8 @@ void compute_evaluation() {
             int pId = game.consts.agent_info[aid].player_id;
             int delta_wet = new_wet-curr_wet;
             if(delta_wet==0) continue;
-            if(new_wet>=100) {nb_100_wet_gain=(my_id==pId)?(nb_100_wet_gain-1):(nb_100_wet_gain+1);}
-            if(new_wet>=50) {nb_50_wet_gain=(my_id==pId)?(nb_50_wet_gain-1):(nb_50_wet_gain+1);}
+            if(new_wet>=100 && curr_wet<100) {nb_100_wet_gain=(my_id==pId)?(nb_100_wet_gain-1):(nb_100_wet_gain+1);}
+            if(new_wet>=50 && curr_wet<50) {nb_50_wet_gain=(my_id==pId)?(nb_50_wet_gain-1):(nb_50_wet_gain+1);}
             wetness_gain = (my_id==pId)?(wetness_gain-delta_wet):(wetness_gain+delta_wet);
         }
 
