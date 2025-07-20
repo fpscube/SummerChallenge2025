@@ -748,8 +748,8 @@ void compute_evaluation() {
 
         // === Étape 6: évaluation finale ===
         float score =
-            wetness_gain/100.0f   * 10.0f +
-            control_score/100.0f  * 100.0f +
+            control_score/100.0f  * 10.0f +
+            wetness_gain/100.0f   * 100.0f +
             nb_50_wet_gain/10.0f  * 1000.0f +
             nb_100_wet_gain/10.0f * 10000.0f ;
 
