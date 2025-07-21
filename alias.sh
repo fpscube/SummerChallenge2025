@@ -8,3 +8,4 @@ alias servB0='serv ../SummerChallenge2025/current.out ../SummerChallenge2025/bot
 alias servB0r='serv ../SummerChallenge2025/bot0.sh ../SummerChallenge2025/current.out -173386750144284364 )'
 
 alias statB0='stat ../SummerChallenge2025/bot0.sh  ../SummerChallenge2025/current.out )'
+alias statB1='stat ../SummerChallenge2025/bot1.out  ../SummerChallenge2025/current.out )'

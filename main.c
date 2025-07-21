@@ -15,7 +15,6 @@
 #define MAX_WIDTH  20
 #define MAX_HEIGHT 20
 #define MAX_AGENTS 10
-#define MAX_BEST_CMD_PER_AGENTS 3
 #define MAX_PLAYERS 2
 #define MAX_MOVES_PER_AGENT 5
 #define MAX_SHOOTS_PER_AGENT 5
@@ -140,6 +139,26 @@ static clock_t gCPUStart;
 #define CPU_BREAK(val)   if (CPU_MS_USED > (val)) break;
 #define ERROR(text) {fprintf(stderr,"ERROR:%s",text);fflush(stderr);exit(1);}
 #define ERROR_INT(text,val) {fprintf(stderr,"ERROR:%s:%d",text,val);fflush(stderr);exit(1);}
+
+void debug_stats() {
+    fprintf(stderr, "\n=== STATS ===\n");
+
+    // Commandes agent
+    for (int a = 0; a < MAX_AGENTS; ++a) {
+        if (!game.state.agents[a].alive) continue;
+        fprintf(stderr, "Agent %d - Commands: %d actions[%d]\n", a+1, game.output.agent_command_counts[a],game.output.agent_command_counts[a]-game.output.move_counts[a] );
+    }
+
+    // Commandes joueur
+    for (int p = 0; p < MAX_PLAYERS; ++p) {
+        fprintf(stderr, "Player %d - PlayerCommands: %d\n", p, game.output.player_command_count[p]);
+    }
+
+    // Simulations
+    fprintf(stderr, "Simulations: %d\n", game.output.simulation_count);
+    fprintf(stderr, "=============\n");
+}
+
 
 int controlled_score_gain_if_agent_moves_to(int agent_id, int nx, int ny) {
     // Calcule le gain net de zone contrôlée si l'agent se déplace en (nx, ny)
@@ -592,38 +611,65 @@ void compute_best_agents_commands() {
         game.output.agent_command_counts[i] = cmd_index;
     }
 }
-
 void compute_best_player_commands() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
-        // On récupère les agents du joueur p
         game.output.player_command_count[p] = 0;
 
         int agent_start_id = game.consts.player_info[p].agent_start_index;
         int agent_stop_id = game.consts.player_info[p].agent_stop_index;
+        int max_cmds[MAX_AGENTS] = {0};
+        int total = 1;
 
-        // Produit cartésien des commandes agents pour former les commandes joueur
-        int indices[MAX_AGENTS];
-        memset(indices, 0, sizeof(indices));
+        // Initialisation avec 1 commande par agent vivant
+        for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
+            if (!game.state.agents[agent_id].alive) continue;
+            max_cmds[agent_id] = 1;
+        }
+
+        // Répartition intelligente
+        bool updated = true;
+        while (updated) {
+            updated = false;
+            for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
+                if (!game.state.agents[agent_id].alive) continue;
+
+                int current = max_cmds[agent_id];
+                int available = game.output.agent_command_counts[agent_id];
+
+                if (current < available) {
+                    int new_total = total / current * (current + 1);
+                    if (new_total <= MAX_COMMANDS_PER_PLAYER) {
+                        max_cmds[agent_id]++;
+                        total = new_total;
+                        updated = true;
+                    }
+                }
+            }
+        }
+
+        // Génération du produit cartésien avec les limites fixées
+        int indices[MAX_AGENTS] = {0};
 
         while (true) {
             if (game.output.player_command_count[p] >= MAX_COMMANDS_PER_PLAYER) ERROR_INT("ERROR to many command",MAX_COMMANDS_PER_PLAYER)
 
-            // Construire une commande complète (tableau de AgentCommand d’agents)
+            // Construire la combinaison
             for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
-                if(!game.state.agents[agent_id].alive) continue;
+                if (!game.state.agents[agent_id].alive) continue;
                 int cmd_id = indices[agent_id];
-                game.output.player_commands[p][game.output.player_command_count[p]][agent_id] = game.output.agent_commands[agent_id][cmd_id];
+                game.output.player_commands[p][game.output.player_command_count[p]][agent_id] =
+                    game.output.agent_commands[agent_id][cmd_id];
             }
 
             game.output.player_command_count[p]++;
 
-            // Incrémenter les indices pour la combinaison suivante
+            // Incrémenter les indices
             int carry = 1;
             for (int agent_id = agent_start_id; agent_id <= agent_stop_id && carry; agent_id++) {
-                if(!game.state.agents[agent_id].alive) continue;
+                if (!game.state.agents[agent_id].alive) continue;
+
                 indices[agent_id]++;
-                int cur_index = indices[agent_id];
-                if (cur_index >= MAX_BEST_CMD_PER_AGENTS ||  cur_index >= game.output.agent_command_counts[agent_id]) {
+                if (indices[agent_id] >= max_cmds[agent_id]) {
                     indices[agent_id] = 0;
                     carry = 1;
                 } else {
@@ -631,7 +677,7 @@ void compute_best_player_commands() {
                 }
             }
 
-            if (carry) break;  // on a parcouru toutes les combinaisons
+            if (carry) break;
         }
     }
 }
@@ -847,6 +893,9 @@ int main() {
 
         // ========== Application ==========
         apply_output();
+
+        debug_stats();
+
     }
 
     return 0;
