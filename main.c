@@ -21,6 +21,7 @@
 #define MAX_BOMB_PER_AGENT 5
 #define MAX_COMMANDS_PER_AGENT 35
 #define MAX_COMMANDS_PER_PLAYER 1024
+#define MAX_ENEMY_IN_SIMU 1 
 #define MAX_SIMULATIONS 1024
 
 // ==========================
@@ -808,27 +809,40 @@ float evaluate_simulation(const SimulationContext* ctx) {
         ctx->nb_50_wet_gain / 10.0f  * 1000.0f +
         ctx->nb_100_wet_gain / 10.0f * 10000.0f;
 }
+
+
 void compute_evaluation() {
     int my_id = game.consts.my_player_id;
     int en_id = !my_id;
     game.output.simulation_count = 0;
 
     int my_count = game.output.player_command_count[my_id];
-    int en_index = 0; // On teste uniquement contre le premier jeu de commandes ennemies
+    int en_count = game.output.player_command_count[en_id];
+    if (en_count > MAX_ENEMY_IN_SIMU) en_count = MAX_ENEMY_IN_SIMU;
 
     for (int i = 0; i < my_count; i++) {
-        SimulationContext ctx;
-        simulate_players_commands(i, en_index, &ctx);
-        float score = evaluate_simulation(&ctx);
+        float worst_score = 1e9f;
+        int worst_enemy_cmd = -1;
+
+        for (int j = 0; j < en_count; j++) {
+            SimulationContext ctx;
+            simulate_players_commands(i, j, &ctx);
+            float score = evaluate_simulation(&ctx);
+
+            if (score < worst_score) {
+                worst_score = score;
+                worst_enemy_cmd = j;
+            }
+        }
 
         game.output.simulation_results[game.output.simulation_count++] = (SimulationResult){
-            .score = score,
+            .score = worst_score,
             .my_cmds_index = i,
-            .op_cmds_index = en_index
+            .op_cmds_index = worst_enemy_cmd
         };
     }
 
-    // Tri décroissant
+    // Tri décroissant pour garder la "moins pire des meilleures"
     for (int a = 0; a < game.output.simulation_count - 1; a++) {
         for (int b = a + 1; b < game.output.simulation_count; b++) {
             if (game.output.simulation_results[b].score > game.output.simulation_results[a].score) {
