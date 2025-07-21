@@ -681,132 +681,154 @@ void compute_best_player_commands() {
         }
     }
 }
+typedef struct {
+    AgentState sim_agents[MAX_AGENTS];
+    int wetness_gain;
+    int nb_50_wet_gain;
+    int nb_100_wet_gain;
+    int control_score;
+} SimulationContext;
 
-
-void compute_evaluation() {
+void simulate_players_commands(int my_cmd_index, int en_cmd_index, SimulationContext* ctx) {
     int my_id = game.consts.my_player_id;
+    int en_id = !my_id;
     int my_start = game.consts.player_info[my_id].agent_start_index;
     int my_stop  = game.consts.player_info[my_id].agent_stop_index;
-    // int op_start = game.consts.player_info[!my_id].agent_start_index;
-    // int op_stop  = game.consts.player_info[!my_id].agent_stop_index;
+    int en_start = game.consts.player_info[en_id].agent_start_index;
+    int en_stop  = game.consts.player_info[en_id].agent_stop_index;
 
+    memcpy(ctx->sim_agents, game.state.agents, sizeof(ctx->sim_agents));
+    ctx->wetness_gain = 0;
+    ctx->nb_50_wet_gain = 0;
+    ctx->nb_100_wet_gain = 0;
+
+    // === Étape 1: Appliquer les déplacements pour me + enemy ===
+    for (int aid = 0; aid < MAX_AGENTS; aid++) {
+        if (!ctx->sim_agents[aid].alive) continue;
+
+        AgentCommand* cmd = NULL;
+        if (aid >= my_start && aid <= my_stop) {
+            cmd = &game.output.player_commands[my_id][my_cmd_index][aid];
+        } else if (aid >= en_start && aid <= en_stop) {
+            cmd = &game.output.player_commands[en_id][en_cmd_index][aid];
+        } else continue;
+
+        ctx->sim_agents[aid].x = cmd->mv_x;
+        ctx->sim_agents[aid].y = cmd->mv_y;
+    }
+
+    // === Étape 2: Appliquer les tirs et bombes pour me + enemy ===
+    for (int aid = 0; aid < MAX_AGENTS; aid++) {
+        if (!ctx->sim_agents[aid].alive) continue;
+
+        AgentCommand* cmd = NULL;
+        if (aid >= my_start && aid <= my_stop) {
+            cmd = &game.output.player_commands[my_id][my_cmd_index][aid];
+        } else if (aid >= en_start && aid <= en_stop) {
+            cmd = &game.output.player_commands[en_id][en_cmd_index][aid];
+        } else continue;
+
+        if (cmd->action_type == CMD_THROW) {
+            for (int t = 0; t < MAX_AGENTS; t++) {
+                if (!ctx->sim_agents[t].alive) continue;
+                int dx = abs(ctx->sim_agents[t].x - cmd->target_x_or_id);
+                int dy = abs(ctx->sim_agents[t].y - cmd->target_y);
+                if (dx <= 1 && dy <= 1)
+                    ctx->sim_agents[t].wetness += 30;
+            }
+        } else if (cmd->action_type == CMD_SHOOT) {
+            int target_id = cmd->target_x_or_id;
+            if (!ctx->sim_agents[target_id].alive) continue;
+
+            AgentState* shooter = &ctx->sim_agents[aid];
+            AgentState* target  = &ctx->sim_agents[target_id];
+            AgentInfo* shooter_info = &game.consts.agent_info[aid];
+
+            int dx = abs(shooter->x - target->x);
+            int dy = abs(shooter->y - target->y);
+            int dist = dx + dy;
+            float range_modifier = dist <= shooter_info->optimal_range ? 1.0f :
+                                   dist <= 2 * shooter_info->optimal_range ? 0.5f : 0.0f;
+            if (range_modifier == 0.0f) continue;
+
+            float cover_modifier = 1.0f;
+            int adj_x = -((target->x - shooter->x) > 0) + ((target->x - shooter->x) < 0);
+            int adj_y = -((target->y - shooter->y) > 0) + ((target->y - shooter->y) < 0);
+            int cx = target->x + adj_x;
+            int cy = target->y + adj_y;
+            if (cx >= 0 && cx < game.consts.map.width && cy >= 0 && cy < game.consts.map.height) {
+                int tile = game.consts.map.map[cy][cx].type;
+                if (tile == 1) cover_modifier = 0.5f;
+                else if (tile == 2) cover_modifier = 0.25f;
+            }
+
+            float damage = shooter_info->soaking_power * range_modifier * cover_modifier;
+            if (damage > 0) target->wetness += (int)damage;
+        }
+    }
+
+    // === Étape 3: Gain de wetness & morts
+    int my_id_player = game.consts.my_player_id;
+    for (int aid = 0; aid < MAX_AGENTS; aid++) {
+        int curr = game.state.agents[aid].wetness;
+        int now  = ctx->sim_agents[aid].wetness;
+        if (now >= 100) {
+            ctx->sim_agents[aid].alive = 0;
+            now = 100;
+        }
+
+        int pid = game.consts.agent_info[aid].player_id;
+        int delta = now - curr;
+        if (delta == 0) continue;
+
+        if (now >= 100 && curr < 100)
+            ctx->nb_100_wet_gain += (pid == my_id_player) ? -1 : +1;
+        if (now >= 50 && curr < 50)
+            ctx->nb_50_wet_gain += (pid == my_id_player) ? -1 : +1;
+
+        ctx->wetness_gain += (pid == my_id_player) ? -delta : +delta;
+    }
+
+    // === Étape 4 : contrôle
+    ctx->control_score = 0;
+    for (int aid = my_start; aid <= my_stop; aid++) {
+        if (!ctx->sim_agents[aid].alive) continue;
+        ctx->control_score += controlled_score_gain_if_agent_moves_to(aid, ctx->sim_agents[aid].x, ctx->sim_agents[aid].y);
+    }
+}
+
+
+
+float evaluate_simulation(const SimulationContext* ctx) {
+    
+
+    return
+        ctx->control_score / 100.0f  * 10.0f +
+        ctx->wetness_gain / 100.0f   * 100.0f +
+        ctx->nb_50_wet_gain / 10.0f  * 1000.0f +
+        ctx->nb_100_wet_gain / 10.0f * 10000.0f;
+}
+void compute_evaluation() {
+    int my_id = game.consts.my_player_id;
+    int en_id = !my_id;
     game.output.simulation_count = 0;
 
-    // For all my cmd to test // todo min max enemie
-    int count = game.output.player_command_count[my_id];
-    for (int i = 0; i < count; i++) {
-        // État simulé des agents
-        AgentState sim_agents[MAX_AGENTS];
-        memcpy(sim_agents, game.state.agents, sizeof(sim_agents));
+    int my_count = game.output.player_command_count[my_id];
+    int en_index = 0; // On teste uniquement contre le premier jeu de commandes ennemies
 
-        int wetness_gain = 0;
-        int nb_50_wet_gain = 0;
-        int nb_100_wet_gain = 0;
-
-        // === Étape 1: appliquer les mouvements ===
-        for (int aid = my_start; aid <= my_stop; aid++) {
-            if (!sim_agents[aid].alive) continue;
-            AgentCommand* cmd = &game.output.player_commands[my_id][i][aid];
-            sim_agents[aid].x = cmd->mv_x;
-            sim_agents[aid].y = cmd->mv_y;
-        }
- 
-
-        // === Étape 2.1: bombes/shoot===
-        for (int aid = my_start; aid <= my_stop; aid++) {
-            if (!sim_agents[aid].alive) continue;
-            AgentCommand* cmd = &game.output.player_commands[my_id][i][aid];
-            if (cmd->action_type == CMD_THROW)
-            {
-                for (int t = 0; t < MAX_AGENTS; t++) {
-                    if (!sim_agents[t].alive) continue;
-                    int dx = abs(sim_agents[t].x - cmd->target_x_or_id);
-                    int dy = abs(sim_agents[t].y - cmd->target_y);
-                    if (dx <= 1 && dy <= 1)  sim_agents[t].wetness += 30;
-                }
-            }       
-            else if (cmd->action_type == CMD_SHOOT)
-            {
-                int target_id = cmd->target_x_or_id;
-                if (!sim_agents[target_id].alive) continue;
-
-                AgentState* shooter = &sim_agents[aid];
-                AgentState* target = &sim_agents[target_id];
-                AgentInfo* shooter_info = &game.consts.agent_info[aid];
-                // AgentInfo* target_info = &game.consts.agent_info[target_id];
-
-                // === Distance Manhattan ===
-                int dx = abs(shooter->x - target->x);
-                int dy = abs(shooter->y - target->y);
-                int dist = dx + dy;
-
-                // === Range modifier ===
-                float range_modifier = 0.0f;
-                if (dist <= shooter_info->optimal_range)
-                    range_modifier = 1.0f;
-                else if (dist <= 2 * shooter_info->optimal_range)
-                    range_modifier = 0.5f;
-                else
-                    range_modifier = 0.0f;
-
-                if (range_modifier == 0.0f) continue; // cible trop loin
-
-                // === Cover modifier (à 1.0 par défaut) ===
-                float cover_modifier = 1.0f; // TODO: check map obstacles later
-
-                // === Hunker modifier (0.25 si accroupi, ici on ne gère pas encore le hunker)
-                float hunker_bonus = 0.0f; // TODO: ajouter gestion si hunkered plus tard
-
-                // === Damage calc ===
-                float base_damage = shooter_info->soaking_power;
-                int damage = (int)(base_damage * range_modifier * (cover_modifier - hunker_bonus));
-
-                if (damage > 0)
-                    target->wetness += damage;
-            }
-
-        }
-   
-
-        // === Étape 3: kpi dead ===
-        for (int aid = 0; aid < MAX_AGENTS; aid++) {
-            int curr_wet = game.state.agents[aid].wetness;
-            int new_wet = sim_agents[aid].wetness;
-            if(new_wet>=100)
-            {
-                new_wet=100;
-                sim_agents[aid].alive=0;
-            }
-            int pId = game.consts.agent_info[aid].player_id;
-            int delta_wet = new_wet-curr_wet;
-            if(delta_wet==0) continue;
-            if(new_wet>=100 && curr_wet<100) {nb_100_wet_gain=(my_id==pId)?(nb_100_wet_gain-1):(nb_100_wet_gain+1);}
-            if(new_wet>=50 && curr_wet<50) {nb_50_wet_gain=(my_id==pId)?(nb_50_wet_gain-1):(nb_50_wet_gain+1);}
-            wetness_gain = (my_id==pId)?(wetness_gain-delta_wet):(wetness_gain+delta_wet);
-        }
-
-        // === Étape 5: score de contrôle de zone ===
-        int control_score = 0;
-        for (int aid = my_start; aid <= my_stop; aid++) {
-            if (!sim_agents[aid].alive) continue;
-            control_score += controlled_score_gain_if_agent_moves_to(aid, sim_agents[aid].x, sim_agents[aid].y);
-        }
-
-        // === Étape 6: évaluation finale ===
-        float score =
-            control_score/100.0f  * 10.0f +
-            wetness_gain/100.0f   * 100.0f +
-            nb_50_wet_gain/10.0f  * 1000.0f +
-            nb_100_wet_gain/10.0f * 10000.0f ;
+    for (int i = 0; i < my_count; i++) {
+        SimulationContext ctx;
+        simulate_players_commands(i, en_index, &ctx);
+        float score = evaluate_simulation(&ctx);
 
         game.output.simulation_results[game.output.simulation_count++] = (SimulationResult){
             .score = score,
             .my_cmds_index = i,
-            .op_cmds_index = -1 // ignoré pour l’instant
+            .op_cmds_index = en_index
         };
     }
 
-    // Tri décroissant des résultats
+    // Tri décroissant
     for (int a = 0; a < game.output.simulation_count - 1; a++) {
         for (int b = a + 1; b < game.output.simulation_count; b++) {
             if (game.output.simulation_results[b].score > game.output.simulation_results[a].score) {
