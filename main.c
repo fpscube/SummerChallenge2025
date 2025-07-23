@@ -20,9 +20,10 @@
 #define MAX_SHOOTS_PER_AGENT 5
 #define MAX_BOMB_PER_AGENT 5
 #define MAX_COMMANDS_PER_AGENT 35
-#define MAX_COMMANDS_PER_PLAYER 1024
-#define MAX_ENEMY_IN_SIMU 1 
-#define MAX_SIMULATIONS 1024
+#define MAX_COMMANDS_PLAYER_ME     1024
+#define MAX_COMMANDS_PLAYER_ENEMIE 1
+#define MAX_COMMANDS (MAX_COMMANDS_PLAYER_ME + MAX_COMMANDS_PLAYER_ENEMIE)
+#define MAX_SIMULATIONS 4096
 
 // ==========================
 // === DATA MODELS
@@ -68,7 +69,7 @@ typedef struct {
     int agent_command_counts[MAX_AGENTS];
 
     // Liste des commandes fusionnées (combinaisons multi-agents) par joueur
-    AgentCommand player_commands[MAX_PLAYERS][MAX_COMMANDS_PER_PLAYER][MAX_AGENTS];
+    AgentCommand player_commands[MAX_PLAYERS][MAX_COMMANDS][MAX_AGENTS];
     int player_command_count[MAX_PLAYERS];
 
     // Résultats de simulations triée par score pour obtenir la meilleur commande simulation_results[0].my_cmds_index
@@ -616,6 +617,7 @@ void compute_best_player_commands() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         game.output.player_command_count[p] = 0;
 
+        int max_total_cmds = (p == game.consts.my_player_id) ? MAX_COMMANDS_PLAYER_ME : MAX_COMMANDS_PLAYER_ENEMIE;
         int agent_start_id = game.consts.player_info[p].agent_start_index;
         int agent_stop_id = game.consts.player_info[p].agent_stop_index;
         int max_cmds[MAX_AGENTS] = {0};
@@ -639,7 +641,7 @@ void compute_best_player_commands() {
 
                 if (current < available) {
                     int new_total = total / current * (current + 1);
-                    if (new_total <= MAX_COMMANDS_PER_PLAYER) {
+                    if (new_total <= max_total_cmds) {
                         max_cmds[agent_id]++;
                         total = new_total;
                         updated = true;
@@ -652,7 +654,7 @@ void compute_best_player_commands() {
         int indices[MAX_AGENTS] = {0};
 
         while (true) {
-            if (game.output.player_command_count[p] >= MAX_COMMANDS_PER_PLAYER) ERROR_INT("ERROR to many command",MAX_COMMANDS_PER_PLAYER)
+            if (game.output.player_command_count[p] >= max_total_cmds) ERROR_INT("ERROR to many command",max_total_cmds)
 
             // Construire la combinaison
             for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
@@ -818,7 +820,6 @@ void compute_evaluation() {
 
     int my_count = game.output.player_command_count[my_id];
     int en_count = game.output.player_command_count[en_id];
-    if (en_count > MAX_ENEMY_IN_SIMU) en_count = MAX_ENEMY_IN_SIMU;
 
     for (int i = 0; i < my_count; i++) {
         float worst_score = 1e9f;
