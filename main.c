@@ -19,7 +19,7 @@
 #define MAX_MOVES_PER_AGENT 5
 #define MAX_SHOOTS_PER_AGENT 5
 #define MAX_BOMB_PER_AGENT 5
-#define MAX_COMMANDS_PER_AGENT 35
+#define MAX_COMMANDS_PER_AGENT 50
 #define MAX_COMMANDS_PLAYER_ME     1024
 #define MAX_COMMANDS_PLAYER_ENEMIE 1
 #define MAX_COMMANDS (MAX_COMMANDS_PLAYER_ME + MAX_COMMANDS_PLAYER_ENEMIE)
@@ -546,33 +546,46 @@ void compute_best_agents_bomb(int agent_id,int new_thrower_x,int new_thrower_y) 
     }
 }
 
-
-
 void compute_best_agents_commands() {
 
-    
+    // === Configuration intelligente : shoot/bomb par nombre d'agents vivants ===
+    static const int max_shoots_per_agent[6] = {0, 1, 2, 3, 4, 5}; // [nb_agents_vivants] => shoots max / agent
+    static const int max_bombs_per_agent[6]  = {0, 1, 2, 2, 2, 2}; // max bombs/agent (ajustable)
 
+    // Compter les agents vivants du joueur courant
+    int my_alive_agents = 0;
+    for (int i = 0; i < MAX_AGENTS; i++) {
+        if (game.state.agents[i].alive && game.consts.agent_info[i].player_id == game.consts.my_player_id) {
+            my_alive_agents++;
+        }
+    }
+    if (my_alive_agents > 5) my_alive_agents = 5;
+
+    // Lire les limites dynamiques
+    int shoot_limit_per_agent = max_shoots_per_agent[my_alive_agents];
+    int bomb_limit_per_agent  = max_bombs_per_agent[my_alive_agents];
+
+    // === Génération des commandes ===
     for (int i = 0; i < MAX_AGENTS; i++) {
 
-        game.output.agent_command_counts[i]=0;        
-        if(!game.state.agents[i].alive) continue;
+        game.output.agent_command_counts[i] = 0;        
+        if (!game.state.agents[i].alive) continue;
         int cmd_index = 0;
-        
-        compute_best_agents_moves(i);     
 
-        int move_count= game.output.move_counts[i];
-        
+        compute_best_agents_moves(i);     
+        int move_count = game.output.move_counts[i];
 
         for (int m = 0; m < move_count && cmd_index < MAX_COMMANDS_PER_AGENT; m++) {
             AgentAction* mv = &game.output.moves[i][m];
             int mv_x = mv->target_x_or_id;
             int mv_y = mv->target_y;
 
-
-            compute_best_agents_bomb(i,mv_x,mv_y);
-            // 2. Bombe (max 1)
-            if (game.output.bomb_counts[i] > 0 && cmd_index < MAX_COMMANDS_PER_AGENT) {
-                AgentAction* bomb = &game.output.bombs[i][0]; // meilleure bombe
+            // === Bombes (jusqu'à bomb_limit_per_agent) ===
+            compute_best_agents_bomb(i, mv_x, mv_y);
+            int bomb_count = game.output.bomb_counts[i];
+            if (bomb_count > bomb_limit_per_agent) bomb_count = bomb_limit_per_agent;
+            for (int b = 0; b < bomb_count && cmd_index < MAX_COMMANDS_PER_AGENT; b++) {
+                AgentAction* bomb = &game.output.bombs[i][b];
                 game.output.agent_commands[i][cmd_index++] = (AgentCommand){
                     .mv_x = mv_x,
                     .mv_y = mv_y,
@@ -583,11 +596,11 @@ void compute_best_agents_commands() {
                 };
             }
 
-            compute_best_agents_shoot(i,mv_x,mv_y);
-            // 1. Shoots (jusqu’à 5)
-            int shoot_limit = game.output.shoot_counts[i];
-            if (shoot_limit > MAX_SHOOTS_PER_AGENT) shoot_limit = MAX_SHOOTS_PER_AGENT;
-            for (int s = 0; s < shoot_limit && cmd_index < MAX_COMMANDS_PER_AGENT; s++) {
+            // === Shoots (jusqu’à shoot_limit_per_agent) ===
+            compute_best_agents_shoot(i, mv_x, mv_y);
+            int shoot_count = game.output.shoot_counts[i];
+            if (shoot_count > shoot_limit_per_agent) shoot_count = shoot_limit_per_agent;
+            for (int s = 0; s < shoot_count && cmd_index < MAX_COMMANDS_PER_AGENT; s++) {
                 AgentAction* shoot = &game.output.shoots[i][s];
                 game.output.agent_commands[i][cmd_index++] = (AgentCommand){
                     .mv_x = mv_x,
@@ -598,7 +611,8 @@ void compute_best_agents_commands() {
                     .score = shoot->score
                 };
             }
-            // 3. Hunker
+
+            // === Hunker ===
             if (cmd_index < MAX_COMMANDS_PER_AGENT) {
                 game.output.agent_commands[i][cmd_index++] = (AgentCommand){
                     .mv_x = mv_x,
@@ -610,9 +624,11 @@ void compute_best_agents_commands() {
                 };
             }
         }
+
         game.output.agent_command_counts[i] = cmd_index;
     }
 }
+
 void compute_best_player_commands() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
         game.output.player_command_count[p] = 0;
