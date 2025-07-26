@@ -20,8 +20,8 @@
 #define MAX_SHOOTS_PER_AGENT 5
 #define MAX_BOMB_PER_AGENT 5
 #define MAX_COMMANDS_PER_AGENT 50
-#define MAX_COMMANDS_PLAYER_ME     1024
-#define MAX_COMMANDS_PLAYER_ENEMIE 1
+#define MAX_COMMANDS_PLAYER_ME     512
+#define MAX_COMMANDS_PLAYER_ENEMIE 512
 #define MAX_COMMANDS (MAX_COMMANDS_PLAYER_ME + MAX_COMMANDS_PLAYER_ENEMIE)
 #define MAX_SIMULATIONS 4096
 
@@ -683,7 +683,7 @@ void compute_best_agents_commands() {
                     .action_type = CMD_THROW,
                     .target_x_or_id = bomb->target_x_or_id,
                     .target_y = bomb->target_y,
-                    .score = bomb->score
+                    .score = mv->score
                 };
             }
 
@@ -699,7 +699,7 @@ void compute_best_agents_commands() {
                     .action_type = CMD_SHOOT,
                     .target_x_or_id = shoot->target_x_or_id,
                     .target_y = shoot->target_y,
-                    .score = shoot->score
+                    .score = mv->score
                 };
             }
 
@@ -937,12 +937,25 @@ void simulate_players_commands(int my_cmd_index, int en_cmd_index, SimulationCon
     }
 
     // === Étape 4 : contrôle
-    // ctx->control_score = controlled_score_gain(&ctx->sim_agents[0]);   // === Étape 4 : contrôle
+    // === Étape 4: Utiliser les scores des commandes déjà calculées ===
     ctx->control_score = 0;
+    // for (int aid = my_start; aid <= my_stop; aid++) {
+    //     if (!ctx->sim_agents[aid].alive) continue;
+    //     ctx->control_score += controlled_score_gain_if_agent_moves_to(aid, ctx->sim_agents[aid].x, ctx->sim_agents[aid].y);
+    // }
+ 
+    float score_sum = 0.0f;
+    int count = 0;
+
     for (int aid = my_start; aid <= my_stop; aid++) {
         if (!ctx->sim_agents[aid].alive) continue;
-        ctx->control_score += controlled_score_gain_if_agent_moves_to(aid, ctx->sim_agents[aid].x, ctx->sim_agents[aid].y);
+        AgentCommand* cmd = &game.output.player_commands[my_id][my_cmd_index][aid];
+        score_sum += cmd->score;
+        count++;
     }
+
+    ctx->control_score += score_sum /100.0;
+
 }
 
 
