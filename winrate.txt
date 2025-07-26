@@ -1,7 +1,19 @@
-Final Statistics:
-Agent 1 Win Percentage: 25,50%
-Agent 2 Win Percentage: 74,50%
+Arena vs Bot 0 Final Statistics:
+Agent 1 Win Percentage: 17,75%
+Agent 2 Win Percentage: 82,25%
 Tie Percentage: 0,00%
+Tie Percentage: 0,00%
+
+Arena : Final Statistics: boot1 vs boot in  arena
+Agent 1 Win Percentage: 14,75%
+Agent 2 Win Percentage: 14,75%
+Tie Percentage: 70,50%
+
+Final Statistics: (Bot current with en 1 me 1024)
+Agent 1 Win Percentage: 21,75%
+Agent 2 Win Percentage: 78,25%
+Tie Percentage: 0,00%
+
 
 Final Statistics:
 Agent 1 Win Percentage: 33,25%

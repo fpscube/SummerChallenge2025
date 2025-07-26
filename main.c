@@ -189,6 +189,8 @@ int controlled_score_gain_if_agent_moves_to(int agent_id, int nx, int ny) {
                 if (!game.state.agents[i].alive) continue;
                 int ax = game.state.agents[i].x;
                 int ay = game.state.agents[i].y;
+                // int ax = (i == agent_id) ? nx : game.state.agents[i].x;
+                // int ay = (i == agent_id) ? ny : game.state.agents[i].y;
                 int d = abs(x - ax) + abs(y - ay);
                 if (game.state.agents[i].wetness >= 50) d *= 2;
                 if (d < d_en) d_en = d;
@@ -201,6 +203,52 @@ int controlled_score_gain_if_agent_moves_to(int agent_id, int nx, int ny) {
 
     return my_gain - enemy_gain;
 }
+
+
+int controlled_score_gain(AgentState *agent_state) {
+    // Calcule le gain net de zone contrôlée si l'agent se déplace en (nx, ny)
+    int my_gain = 0;
+    int enemy_gain = 0;
+
+    int start_index = game.consts.player_info[game.consts.my_player_id].agent_start_index;
+    int stop_index = game.consts.player_info[game.consts.my_player_id].agent_stop_index;
+    int en_start_index = game.consts.player_info[!game.consts.my_player_id].agent_start_index;
+    int en_stop_index = game.consts.player_info[!game.consts.my_player_id].agent_stop_index;
+
+
+    for (int y = 0; y < game.consts.map.height; y++) {
+        for (int x = 0; x < game.consts.map.width; x++) {
+            if (game.consts.map.map[y][x].type > 0) continue; // obstacle
+
+            int d_my = INT_MAX;
+            int d_en = INT_MAX;
+
+            for (int i = start_index; i <= stop_index; i++) {
+                if (!game.state.agents[i].alive) continue;
+                int ax = agent_state[i].x;
+                int ay = agent_state[i].y;
+                int d = abs(x - ax) + abs(y - ay);
+                if (game.state.agents[i].wetness >= 50) d *= 2;
+                if (d < d_my) d_my = d;
+            }
+
+            for (int i = en_start_index; i <= en_stop_index; i++) {
+                if (!game.state.agents[i].alive) continue;
+                int ax = agent_state[i].x;
+                int ay = agent_state[i].y;
+                int d = abs(x - ax) + abs(y - ay);
+                if (game.state.agents[i].wetness >= 50) d *= 2;
+                if (d < d_en) d_en = d;
+            }
+
+            if (d_my < d_en) my_gain++;
+            else if (d_en < d_my) enemy_gain++;
+        }
+    }
+
+    return my_gain - enemy_gain;
+}
+
 
 
 // ==========================
@@ -242,8 +290,6 @@ void read_game_inputs_init() {
         game.consts.player_info[player].agent_count++;
         game.consts.player_info[player].agent_stop_index = i;
     }
-    fprintf(stderr,"%d %d %d\n",game.consts.player_info[0].agent_count,game.consts.player_info[0].agent_start_index,game.consts.player_info[0].agent_stop_index);
-    fprintf(stderr,"%d %d %d\n",game.consts.player_info[1].agent_count,game.consts.player_info[1].agent_start_index,game.consts.player_info[1].agent_stop_index);
     scanf("%d%d", &game.consts.map.width, &game.consts.map.height);
     for (int i = 0; i < game.consts.map.height * game.consts.map.width; i++) {
         int x, y, tile_type;
@@ -271,7 +317,7 @@ void read_game_inputs_cycle() {
         agent_id = agent_id -1;
         game.state.agents[agent_id] = (AgentState){agent_id,agent_x,agent_y,agent_cooldown,agent_splash_bombs,agent_wetness,1};
     }
-    
+
     scanf("%d", &game.state.my_agent_count_do_not_use);
     CPU_RESET;
 }
@@ -399,6 +445,7 @@ void compute_best_agents_moves(int agent_id) {
         }
 
         int gain = controlled_score_gain_if_agent_moves_to(agent_id, nx, ny);
+        //if(my_player_id != agent_info->player_id) gain = -gain;
         float score = (float)gain*10 + (-min_dist_to_enemy - penalty);
 
         AgentAction action = {
@@ -483,7 +530,44 @@ void compute_best_agents_shoot(int agent_id,int new_shooter_x,int new_shooter_y)
     game.output.shoot_counts[agent_id] = shoots_count;
     
 }
-void compute_best_agents_bomb(int agent_id,int new_thrower_x,int new_thrower_y) {
+
+bool is_blocked(int x, int y,int thrower_x, int thrower_y) {
+    if (x < 0 || x >= game.consts.map.width || y < 0 || y >= game.consts.map.height) return true;
+    if (game.consts.map.map[y][x].type > 0) return true;
+    if (x == thrower_x && y == thrower_y) return true;
+    return false;
+}
+
+int count_penalties(int cx, int cy,  int thrower_x, int thrower_y) {
+    int penalty = 0;
+    for (int ox = -1; ox <= 1; ++ox) {
+        for (int oy = -1; oy <= 1; ++oy) {
+            int nx = cx + ox;
+            int ny = cy + oy;
+            if (nx < 0 || nx >= game.consts.map.width || ny < 0 || ny >= game.consts.map.height) {
+                penalty++;
+            } else if ((game.consts.map.map[ny][nx].type > 0) || (nx == thrower_x && ny == thrower_y)) {
+                penalty++;
+            }
+        }
+    }
+    return penalty;
+}
+
+bool zone_touche_allie(int cx, int cy, int player_id, AgentState agents[]) {
+    for (int a = game.consts.player_info[player_id].agent_start_index;
+         a <= game.consts.player_info[player_id].agent_stop_index; ++a) {
+        AgentState* ally = &agents[a];
+        if (!ally->alive) continue;
+        if (abs(ally->x - cx) <= 1 && abs(ally->y - cy) <= 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+
+void compute_best_agents_bomb(int agent_id, int new_thrower_x, int new_thrower_y) {
     game.output.bomb_counts[agent_id] = 0;
 
     AgentState* thrower_state = &game.state.agents[agent_id];
@@ -493,47 +577,53 @@ void compute_best_agents_bomb(int agent_id,int new_thrower_x,int new_thrower_y) 
     int my_player_id = thrower_info->player_id;
     int enemy_player_id = !my_player_id;
 
-    // Parcours des ennemis vivants
-    for (int k = game.consts.player_info[enemy_player_id].agent_start_index;
-            k <= game.consts.player_info[enemy_player_id].agent_stop_index; ++k) {
+    AgentState* agents = game.state.agents;
 
-        AgentState* enemy = &game.state.agents[k];
+    for (int k = game.consts.player_info[enemy_player_id].agent_start_index;
+         k <= game.consts.player_info[enemy_player_id].agent_stop_index; ++k) {
+
+        AgentState* enemy = &agents[k];
         if (!enemy->alive) continue;
 
-        int tx = enemy->x;
-        int ty = enemy->y;
+        int ex = enemy->x;
+        int ey = enemy->y;
 
-        // Vérifier portée
-        int dist = abs(tx - new_thrower_x) + abs(ty - new_thrower_y);
-        if (dist > 4) continue;
+        // 5 directions : centre (0,0), puis les 4 latérales
+        int dxs[5] = {0, -1, 1, 0, 0};
+        int dys[5] = {0, 0, 0, -1, 1};
 
-        // Vérifier que la bombe ne touche pas un allié ni le lanceur
-        bool hits_ally_or_self = false;
-        for (int a = game.consts.player_info[my_player_id].agent_start_index;
-                a <= game.consts.player_info[my_player_id].agent_stop_index; ++a) {
-            AgentState* ally = &game.state.agents[a];
-            if (!ally->alive) continue;
+        for (int d = 0; d < 5; ++d) {
+            int tx = ex + dxs[d];
+            int ty = ey + dys[d];
 
-            int dxa = abs(ally->x - tx);
-            int dya = abs(ally->y - ty);
-            if (dxa <= 1 && dya <= 1) {
-                hits_ally_or_self = true;
-                break;
+            // Si direction latérale, vérifier que la direction opposée est bloquée
+            if (d > 0) {
+                int ox = ex - dxs[d];
+                int oy = ey - dys[d];
+                if (!is_blocked(ox, oy, new_thrower_x, new_thrower_y)) continue;
             }
-        }
 
-        if (hits_ally_or_self) continue;
+            // Portée
+            int dist = abs(tx - new_thrower_x) + abs(ty - new_thrower_y);
+            if (dist > 4) continue;
 
-        if (game.output.bomb_counts[agent_id] < MAX_BOMB_PER_AGENT) {
-            game.output.bombs[agent_id][game.output.bomb_counts[agent_id]++] = (AgentAction){
-                .target_x_or_id = tx,
-                .target_y = ty,
-                .score = 100 - enemy->wetness
-            };
+            // Pas de friendly fire
+            if (zone_touche_allie(tx, ty, my_player_id, agents)) continue;
+
+            // Score
+            int score = 100 - enemy->wetness - count_penalties(tx, ty, new_thrower_x, new_thrower_y);
+
+            if (game.output.bomb_counts[agent_id] < MAX_BOMB_PER_AGENT) {
+                game.output.bombs[agent_id][game.output.bomb_counts[agent_id]++] = (AgentAction){
+                    .target_x_or_id = tx,
+                    .target_y = ty,
+                    .score = score
+                };
+            }
         }
     }
 
-    // Tri décroissant par score
+    // Tri par score décroissant
     int count = game.output.bomb_counts[agent_id];
     for (int m = 0; m < count - 1; m++) {
         for (int n = m + 1; n < count; n++) {
@@ -545,6 +635,7 @@ void compute_best_agents_bomb(int agent_id,int new_thrower_x,int new_thrower_y) 
         }
     }
 }
+
 
 void compute_best_agents_commands() {
 
@@ -571,7 +662,7 @@ void compute_best_agents_commands() {
         game.output.agent_command_counts[i] = 0;        
         if (!game.state.agents[i].alive) continue;
         int cmd_index = 0;
-
+        
         compute_best_agents_moves(i);     
         int move_count = game.output.move_counts[i];
 
@@ -628,6 +719,41 @@ void compute_best_agents_commands() {
         game.output.agent_command_counts[i] = cmd_index;
     }
 }
+// Renvoie 1 si collision (destination ou swap), 0 sinon
+int check_mv_collision(int my_player_id, int cmds_index, int agent_start_id, int agent_stop_id) {
+    for (int a1 = agent_start_id; a1 <= agent_stop_id; a1++) {
+        if (!game.state.agents[a1].alive) continue;
+        AgentCommand *cmd1 = &game.output.player_commands[my_player_id][cmds_index][a1];
+        int from1_x = game.state.agents[a1].x;
+        int from1_y = game.state.agents[a1].y;
+        int to1_x = cmd1->mv_x;
+        int to1_y = cmd1->mv_y;
+
+        for (int a2 = a1 + 1; a2 <= agent_stop_id; a2++) {
+            if (!game.state.agents[a2].alive) continue;
+            AgentCommand *cmd2 = &game.output.player_commands[my_player_id][cmds_index][a2];
+            int from2_x = game.state.agents[a2].x;
+            int from2_y = game.state.agents[a2].y;
+            int to2_x = cmd2->mv_x;
+            int to2_y = cmd2->mv_y;
+
+            // Collision de destination : deux agents veulent aller au même endroit
+            if (to1_x == to2_x && to1_y == to2_y) {
+                // fprintf(stderr,"collision a:%d-a:%d x:%d y:%d\n",a1,a2,to1_x,to1_y);
+                return 1;
+            }
+
+            // Swap : chacun va à la position de l'autre
+            if (to1_x == from2_x && to1_y == from2_y && to2_x == from1_x && to2_y == from1_y) {
+                
+                // fprintf(stderr,"swap a:%d-a:%d x:%d y:%d\n",a1,a2,to1_x,to1_y);
+                return 1;
+            }
+        }
+    }
+    return 0; // Pas de collisions ni de swaps
+}
+
 
 void compute_best_player_commands() {
     for (int p = 0; p < MAX_PLAYERS; p++) {
@@ -679,9 +805,11 @@ void compute_best_player_commands() {
                 game.output.player_commands[p][game.output.player_command_count[p]][agent_id] =
                     game.output.agent_commands[agent_id][cmd_id];
             }
+            bool collision = check_mv_collision(p,game.output.player_command_count[p],agent_start_id,agent_stop_id);
 
-            game.output.player_command_count[p]++;
+            if(!collision) game.output.player_command_count[p]++;
 
+            // game.output.player_command_count[p]++;
             // Incrémenter les indices
             int carry = 1;
             for (int agent_id = agent_start_id; agent_id <= agent_stop_id && carry; agent_id++) {
@@ -809,6 +937,7 @@ void simulate_players_commands(int my_cmd_index, int en_cmd_index, SimulationCon
     }
 
     // === Étape 4 : contrôle
+    // ctx->control_score = controlled_score_gain(&ctx->sim_agents[0]);   // === Étape 4 : contrôle
     ctx->control_score = 0;
     for (int aid = my_start; aid <= my_stop; aid++) {
         if (!ctx->sim_agents[aid].alive) continue;
@@ -874,16 +1003,46 @@ void compute_evaluation() {
 
 
 
-
 void apply_output() {
-    float cpu=CPU_MS_USED;
+    float cpu = CPU_MS_USED;
     int my_player_id = game.consts.my_player_id;
+    int enemy_player_id = !game.consts.my_player_id;
     int agent_start_id = game.consts.player_info[my_player_id].agent_start_index;
     int agent_stop_id = game.consts.player_info[my_player_id].agent_stop_index;
+    int enemy_start_id = game.consts.player_info[enemy_player_id].agent_start_index;
+    int enemy_stop_id  = game.consts.player_info[enemy_player_id].agent_stop_index;
 
     if (game.output.simulation_count == 0) {
-       ERROR("no simu result");
+        ERROR("no simu result");
     }
+    // fprintf(stderr, "\n=== ENEMY AGENTS (cmd_id = 0) ===\n");
+    // for (int enemy_id = enemy_start_id; enemy_id <= enemy_stop_id; enemy_id++) {
+    //     AgentCommand *e_cmd = &game.output.player_commands[enemy_player_id][0][enemy_id];
+    //     const char *e_act = (e_cmd->action_type == CMD_SHOOT) ? "SH" :
+    //                         (e_cmd->action_type == CMD_THROW) ? "TH" : "HK";
+    //     fprintf(stderr, "E%d:(%d,%d)%s(%d,%d)[%.1f]\n",
+    //         enemy_id + 1, e_cmd->mv_x, e_cmd->mv_y,
+    //         e_act, e_cmd->target_x_or_id, e_cmd->target_y, e_cmd->score);
+    // }
+    // // Affichage synthétique des 3 meilleures commandes
+    // int top_n = (game.output.simulation_count < 50) ? game.output.simulation_count : 50;
+    // for (int rank = 0; rank < top_n; rank++) {
+    //     SimulationResult *res = &game.output.simulation_results[rank];
+    //     fprintf(stderr, "#%d: S=%.1f | my=%d | en=%d || ",
+    //         rank + 1, res->score, res->my_cmds_index, res->op_cmds_index);
+
+    //     for (int agent_id = agent_start_id; agent_id <= agent_stop_id; agent_id++) {
+    //         AgentCommand *cmd = &game.output.player_commands[my_player_id][res->my_cmds_index][agent_id];
+    //         const char *act = (cmd->action_type == CMD_SHOOT) ? "SH" :
+    //                           (cmd->action_type == CMD_THROW) ? "TH" : "HK";
+    //         fprintf(stderr, "A%d:(%d,%d)%s(%d,%d)[%.1f] ",
+    //             agent_id + 1, cmd->mv_x, cmd->mv_y,
+    //             act, cmd->target_x_or_id, cmd->target_y, cmd->score);
+    //     }
+
+    //     fprintf(stderr, "\n");
+    // }
+    // fprintf(stderr, "================\n");
 
     int best_index = game.output.simulation_results[0].my_cmds_index;
 
@@ -930,7 +1089,6 @@ int main() {
     read_game_inputs_init();
 
     while (1) {
-        fprintf(stderr,"current\n");
         // ========== Lecture des entrées
         read_game_inputs_cycle();
 
@@ -944,10 +1102,11 @@ int main() {
         // ========== Évaluation stratégique ==========
         compute_evaluation();
 
+
         // ========== Application ==========
         apply_output();
 
-        debug_stats();
+        // debug_stats();
 
     }
 

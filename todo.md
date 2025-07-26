@@ -1,5 +1,6 @@
 
-
+strategie bomb block
+strategie escape from fire (when both can wire)
 
 Analyse des combinatoires:
 5 vs 5
